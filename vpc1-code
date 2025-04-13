@@ -1,0 +1,239 @@
+
+  
+}
+
+##Creating VPc
+
+resource "aws_vpc" "aprilvpc" {
+    cidr_block = "10.0.0.0/16"
+    tags = {
+      Name = "myvpc"
+    }
+  
+}
+
+### creating public subnet
+
+resource "aws_subnet" "public-sub" {
+    vpc_id = aws_vpc.aprilvpc.id
+    availability_zone = "eu-north-1a"
+    cidr_block = "10.0.1.0/24"
+    tags = {
+      Name = "publicsubnet"
+    }
+  
+}
+
+## creating private subnet 
+
+resource "aws_subnet" "private-sub" {
+    vpc_id = aws_vpc.aprilvpc.id
+    availability_zone = "eu-north-1b"
+    cidr_block = "10.0.2.0/24"
+    tags = {
+      Name = "privatesubnet"
+    }
+
+  
+}
+
+### Creating internet gateway
+
+resource "aws_internet_gateway" "mygate" {
+    vpc_id = aws_vpc.aprilvpc.id
+    tags = {
+        Name = "myinternaetgateway"
+    }
+  
+}
+
+## creating public route-table 
+
+resource "aws_route_table" "public-route" {
+    vpc_id = aws_vpc.aprilvpc.id
+    tags = {
+      Name = "public-route-table"
+    }
+}
+
+## creating private route-tble 
+
+resource "aws_route_table" "private-route" {
+    vpc_id = aws_vpc.aprilvpc.id
+    tags = {
+        Name = "private-route-table"
+    }
+  
+}
+
+
+### adding internet-gateway to public-route table 
+
+resource "aws_route" "internet_route" {
+    route_table_id = aws_route_table.public-route.id
+    destination_cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.mygate.id
+     
+
+}
+
+## adding public-subnets to public route table 
+
+resource "aws_route_table_association" "pub-ass" {
+    subnet_id = aws_subnet.public-sub.id 
+    route_table_id = aws_route_table.public-route.id
+ 
+}
+
+### adding private-subnets to private route table
+
+resource "aws_route_table_association" "private-ass" {
+   subnet_id = aws_subnet.private-sub.id
+   route_table_id = aws_route_table.private-route.id
+}
+
+##creating elastic ip
+resource "aws_eip" "elasticip" {
+    domain = "vpc"
+  
+}
+
+##creating a natgateway
+resource "aws_nat_gateway" "natgateway" {
+    subnet_id = aws_subnet.public-sub.id 
+    allocation_id = aws_eip.elasticip.id
+    connectivity_type = "public"
+    tags = {
+      Name = "mynatgateway"
+    }
+  
+}
+
+##adding natgateway into private route table 
+resource "aws_route" "private-route" {
+    route_table_id = aws_route_table.private-route.id
+    destination_cidr_block = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.natgateway.id
+     
+
+}
+
+## Creating public server 
+resource "aws_instance" "public" {
+    ami = "ami-0274f4b62b6ae3bd5"
+    instance_type = "t3.micro"
+    subnet_id = aws_subnet.public-sub.id
+    associate_public_ip_address = true
+    key_name = "NewKEY"
+    user_data = <<-EOF
+                 #!/bin/bash
+                 sudo su -
+                 yum install httpd -y 
+                 cd /var/www/html
+                 touch index.html
+                 echo "<h1> this is public ec2<h1>" >> index.html
+                 EOF
+    tags = {
+      Nmae = "public-server"
+    }
+  
+}
+
+
+##creating private subnet 
+
+resource "aws_instance" "private" {
+    ami = "ami-0274f4b62b6ae3bd5"
+    instance_type = "t3.micro"
+    subnet_id = aws_subnet.private-sub.id
+    key_name = "NewKEY"
+    user_data = <<-EOF
+                 #!/bin/bash
+                 sudo su -
+                 yum install httpd -y 
+                 cd /var/www/html
+                 touch index.html
+                 echo "<h1> this is private ec2<h1>" >> index.html
+                 EOF
+    tags = {
+      Nmae = "private-server"
+    }
+}
+  
+
+## creating security group for aws ec2 endpoint 
+
+resource "aws_security_group" "endpoint" {
+    name ="endpoit-sg"
+    description = "allowing all tarffic"
+    vpc_id = aws_vpc.aprilvpc.id
+    egress {
+        from_port = 0
+        to_port = 0
+        protocol = "-1"
+        cidr_blocks = ["0.0.0.0/0"]
+    
+    }
+    tags = {
+      name = "endpont-securiy"
+    }
+  
+}
+
+
+
+## creating private server 
+
+resource "aws_ec2_instance_connect_endpoint" "myinstant" {
+    subnet_id = aws_subnet.private-sub.id
+    security_group_ids = [aws_security_group.endpoint.id]
+    tags = {
+      Name = "ec2-endpoint"
+    }
+  
+}
+
+##Creating tansit gateway 
+
+resource "aws_ec2_transit_gateway" "tramsit-gw" {
+    description = "connecting one vpc to another vpc "
+    tags = {
+      Name = "trasit-gateway"
+    }
+  
+}
+
+##creating a transit attechment
+
+resource "aws_ec2_transit_gateway_vpc_attachment" "vpc1" {
+    transit_gateway_id = aws_ec2_transit_gateway.tramsit-gw.id
+    vpc_id = aws_vpc.aprilvpc.id
+    subnet_ids = [ 
+        aws_subnet.private-sub.id,
+        aws_subnet.public-sub.id    
+     ]
+    tags = {
+      name = "vpc1-attachnebt"
+    }
+
+}
+
+#### adding transit-gateway into public-router
+
+resource "aws_route" "adding-tarnsit" {
+    route_table_id = aws_route_table.public-route.id
+    destination_cidr_block = "192.168.0.0/16"
+    transit_gateway_id = aws_ec2_transit_gateway.tramsit-gw.id
+  
+}
+
+
+## adding transit-gateway into private-router
+resource "aws_route" "adding-tarnsit1" {
+    route_table_id = aws_route_table.private-route.id
+    destination_cidr_block = "192.168.0.0/16"
+    transit_gateway_id = aws_ec2_transit_gateway.tramsit-gw.id
+  
+}
+
+##########################################################################
